@@ -1,0 +1,231 @@
+<!-- ===== OVERLAY-DIAGNOSE: nur auf einer verborgenen, nicht indexierten Testseite einsetzen ===== -->
+<!-- Ändert nichts an der Seite. Alle Test-Elemente werden nach dem Test wieder entfernt. -->
+<style>
+  #tt-box{font:14px/1.45 system-ui,sans-serif;border:2px dashed #777;padding:12px;margin:12px 0;color:#222;background:#fff}
+  #tt-box h3{margin:0 0 8px;font-size:17px}
+  #tt-box .tt-row{margin:6px 0;padding:6px 8px;background:#e6e6e6}
+  #tt-box .tt-style{background:#2e7d32;color:#fff}
+  #tt-box button,#tt-box .tt-btn{font:inherit;display:inline-block;padding:6px 12px;margin:4px 6px 4px 0;cursor:pointer;border:1px solid #555;background:#f4f4f4;color:#222;text-decoration:none}
+  #tt-box pre{white-space:pre-wrap;word-break:break-word;background:#14181c;color:#bdf5c8;padding:10px;max-height:480px;overflow:auto;font:12px/1.45 ui-monospace,Consolas,monospace}
+  #tt-fixed{display:none;position:fixed;inset:0;z-index:2147483647;background:rgba(0,0,0,.88);color:#fff;align-items:center;justify-content:center;flex-direction:column;font-size:20px}
+  #tt-fixed:target{display:flex}
+</style>
+
+<div id="tt-box">
+  <h3>Overlay-Diagnose</h3>
+
+  <div class="tt-row tt-style" id="tt-s1">A) Grün = &lt;style&gt;-Block wird durchgelassen</div>
+  <div class="tt-row" id="tt-s2" style="background:#2e7d32;color:#fff">B) Grün = style-Attribut wird durchgelassen</div>
+
+  <div class="tt-row">
+    C) popover ohne JavaScript:
+    <button type="button" popovertarget="tt-pop">Popover öffnen</button>
+    <div id="tt-pop" popover>
+      <p>Popover aktiv. Liegt dieses Fenster über Header und Cookie-Banner?</p>
+      <button type="button" popovertarget="tt-pop" popovertargetaction="hide">Schließen</button>
+    </div>
+    <small>Steht der Kasten dauerhaft im Text, wurde das Attribut entfernt oder der Browser kennt es nicht.</small>
+  </div>
+
+  <div class="tt-row">
+    D) Fixed-Overlay nur mit CSS (:target):
+    <a class="tt-btn" href="#tt-fixed">Fixed-Overlay öffnen</a>
+    <div id="tt-fixed" hidden>
+      <p>position:fixed + z-index:max</p>
+      <a class="tt-btn" href="#tt-box">Schließen</a>
+    </div>
+    <small>Funktioniert nicht, wenn die Seite ein &lt;base href&gt; setzt (Anker-Links führen dann woandershin).</small>
+  </div>
+
+  <div class="tt-row">
+    E) JavaScript-Diagnose:
+    <button type="button" id="tt-run">Alle Tests starten (3 kurze rote Einblendungen)</button>
+    <button type="button" id="tt-copy">Bericht kopieren</button>
+  </div>
+
+  <pre id="tt-out">JavaScript nicht ausgeführt oder blockiert. Nur A bis D auswerten.</pre>
+</div>
+
+<script>
+(function(){
+  var box=document.getElementById('tt-box'), out=document.getElementById('tt-out');
+  if(!box||!out) return;
+  var L=[], V=[], de=document.documentElement, GREEN='rgb(46, 125, 50)', busy=false;
+
+  document.addEventListener('securitypolicyviolation',function(e){V.push(e.violatedDirective+' <- '+(e.blockedURI||'inline'));});
+
+  function log(s){L.push(s);}
+  function show(){out.textContent=L.join('\n');}
+  function desc(e){
+    if(!e||!e.tagName) return '(nichts)';
+    var s=e.tagName.toLowerCase();
+    if(e.id) s+='#'+e.id;
+    if(e.classList&&e.classList.length) s+='.'+[].slice.call(e.classList,0,3).join('.');
+    return s;
+  }
+  function sup(a,b){ try{ return b===undefined?CSS.supports(a):CSS.supports(a,b); }catch(x){ return false; } }
+  function nz(v){ return !!v&&v!=='none'&&v!=='normal'&&v!=='auto'; }
+
+  /* Viewport-Referenz: ein unsichtbares fixed-Element direkt unter <html> */
+  function viewport(){
+    var r=document.createElement('div');
+    Object.assign(r.style,{position:'fixed',top:'0',left:'0',width:'100%',height:'100%',visibility:'hidden',pointerEvents:'none'});
+    de.appendChild(r);
+    var b=r.getBoundingClientRect(), o={w:b.width,h:b.height};
+    de.removeChild(r);
+    return o;
+  }
+
+  /* Eigenschaften, die ein position:fixed-Kind in die Box einsperren */
+  function cbList(cs){
+    var r=[];
+    ['transform','translate','rotate','scale','perspective','filter','backdrop-filter'].forEach(function(p){
+      var v=cs.getPropertyValue(p); if(nz(v)) r.push(p+': '+v.slice(0,40));
+    });
+    var c=cs.getPropertyValue('contain'); if(/layout|paint|strict|content/.test(c)) r.push('contain: '+c);
+    var t=cs.getPropertyValue('container-type'); if(nz(t)) r.push('container-type: '+t);
+    var w=cs.getPropertyValue('will-change'); if(/transform|perspective|filter|translate|rotate|scale/.test(w)) r.push('will-change: '+w);
+    return r;
+  }
+  /* Eigenschaften, die einen eigenen Stacking-Context erzeugen */
+  function stList(cs,pcs){
+    var r=[], pos=cs.position, z=cs.zIndex;
+    if(pos==='fixed'||pos==='sticky') r.push('position: '+pos);
+    if((pos==='relative'||pos==='absolute')&&z!=='auto') r.push('position: '+pos+' + z-index: '+z);
+    if(pcs&&/flex|grid/.test(pcs.display)&&z!=='auto') r.push('Flex/Grid-Kind + z-index: '+z);
+    if(parseFloat(cs.opacity)<1) r.push('opacity: '+cs.opacity);
+    if(cs.isolation==='isolate') r.push('isolation: isolate');
+    if(nz(cs.mixBlendMode)) r.push('mix-blend-mode: '+cs.mixBlendMode);
+    if(nz(cs.getPropertyValue('clip-path'))) r.push('clip-path');
+    return r;
+  }
+
+  function passive(){
+    L=[];
+    log('=== 1. Umgebung ===');
+    log('Skripte: ausgeführt');
+    var vp=viewport();
+    log('Viewport: '+Math.round(vp.w)+' x '+Math.round(vp.h)+' px');
+    log('Browser: '+navigator.userAgent);
+    log('CSS-Support: inset='+sup('inset','0')+' | 100dvh='+sup('height','100dvh')+' | :popover-open='+sup('selector(:popover-open)')+' | env(safe-area)='+sup('top','env(safe-area-inset-top)'));
+
+    log('');
+    log('=== 2. Was hat das CMS durchgelassen? ===');
+    var s1=document.getElementById('tt-s1'), s2=document.getElementById('tt-s2');
+    log('<style>-Block wirksam: '+(getComputedStyle(s1).backgroundColor===GREEN));
+    log('style-Attribut wirksam: '+(!!s2.getAttribute('style')&&getComputedStyle(s2).backgroundColor===GREEN));
+    var pop=document.getElementById('tt-pop'), fx=document.getElementById('tt-fixed'), tb=box.querySelector('[popovertarget]');
+    log('popover-Attribut erhalten: '+(!!pop&&pop.hasAttribute('popover'))+' | popovertarget erhalten: '+!!tb+' | hidden erhalten: '+(!!fx&&fx.hasAttribute('hidden')));
+    log('Browser kennt: popover='+('popover' in HTMLElement.prototype)+' | dialog.showModal='+(typeof HTMLDialogElement!=='undefined'&&typeof HTMLDialogElement.prototype.showModal==='function'));
+
+    log('');
+    log('=== 3. Vorfahren der Testbox (innen nach außen, nur auffällige) ===');
+    var first=null;
+    for(var el=box; el&&el.nodeType===1; el=el.parentElement){
+      var cs=getComputedStyle(el), cb=cbList(cs);
+      var st=stList(cs,el.parentElement?getComputedStyle(el.parentElement):null).concat(cb);
+      if(cb.length&&!first) first=el;
+      if(cb.length||st.length){
+        log('- '+desc(el)
+          +(cb.length?'\n    fängt fixed-Kinder ein: '+cb.join('; '):'')
+          +(st.length?'\n    eigener Stacking-Context: '+st.join('; '):''));
+      }
+    }
+    log(first
+      ?'=> position:fixed wird von '+desc(first)+' eingefangen und bleibt in der Box.'
+      :'=> Kein Vorfahre fängt fixed ein: position:fixed bezieht sich auf den Viewport.');
+
+    log('');
+    log('=== 4. Mögliche Überdecker (fixed/sticky außerhalb der Box) ===');
+    var f=[], all=document.body.getElementsByTagName('*');
+    for(var i=0;i<all.length;i++){
+      var e=all[i]; if(box.contains(e)) continue;
+      var c=getComputedStyle(e); if(c.position!=='fixed'&&c.position!=='sticky') continue;
+      var r=e.getBoundingClientRect(); if(!r.width||!r.height||c.visibility==='hidden') continue;
+      f.push({e:e,p:c.position,z:c.zIndex,a:Math.round(r.width*r.height/(vp.w*vp.h)*100)});
+    }
+    function zn(x){ return x.z==='auto'?-1:parseInt(x.z,10); }
+    f.sort(function(a,b){ return zn(b)-zn(a); });
+    if(!f.length) log('keine gefunden (später nachgeladene Consent-Dialoge fehlen evtl. noch)');
+    f.slice(0,12).forEach(function(x){ log('- '+desc(x.e)+' | '+x.p+' | z-index '+x.z+' | '+x.a+' % des Viewports'); });
+    log('Hinweis: z-index gilt nur innerhalb des jeweiligen Stacking-Contexts, Zahlen sind nicht direkt vergleichbar.');
+
+    log('');
+    log('=== 5. Sicherheits-Header der eigenen Seite ===');
+    var meta=document.querySelector('meta[http-equiv="Content-Security-Policy"]');
+    log('CSP per <meta>: '+(meta?meta.getAttribute('content'):'-'));
+    return fetch(location.href,{method:'HEAD',credentials:'same-origin',cache:'no-store'}).then(function(r){
+      ['content-security-policy','content-security-policy-report-only','x-frame-options','permissions-policy'].forEach(function(k){
+        log(k+': '+(r.headers.get(k)||'-'));
+      });
+    }).catch(function(x){ log('Header-Abfrage nicht möglich: '+x.message); });
+  }
+
+  function probe(kind,done){
+    var el, r={kind:kind};
+    try{
+      el=document.createElement(kind==='dialog'?'dialog':'div');
+      if(kind==='popover') el.setAttribute('popover','manual');
+      Object.assign(el.style,{position:'fixed',top:'0',left:'0',width:'100%',height:'100%',margin:'0',padding:'8px',border:'0',boxSizing:'border-box',maxWidth:'none',maxHeight:'none',background:'rgba(255,0,0,.25)',color:'#900',font:'bold 20px sans-serif',zIndex:'2147483647'});
+      if(kind==='fixed') el.style.display='block';
+      el.textContent='TEST '+kind+': reicht diese Fläche bis ganz nach oben?';
+      box.appendChild(el);
+      if(kind==='popover') el.showPopover();
+      if(kind==='dialog') el.showModal();
+      var vp=viewport(), b=el.getBoundingClientRect();
+      r.esc=Math.abs(b.width-vp.w)<2&&Math.abs(b.height-vp.h)<2&&Math.abs(b.left)<2&&Math.abs(b.top)<2;
+      r.size=Math.round(b.width)+'x'+Math.round(b.height)+' px bei '+Math.round(b.left)+'/'+Math.round(b.top);
+      r.pts=[['Mitte',vp.w/2,vp.h/2],['oben',vp.w/2,4],['unten',vp.w/2,vp.h-4]].map(function(p){
+        var h=document.elementFromPoint(p[1],p[2]);
+        return p[0]+': '+((h===el||el.contains(h))?'liegt oben':'verdeckt von '+desc(h));
+      });
+    }catch(x){ r.err=x.message; }
+    setTimeout(function(){
+      try{ if(kind==='popover'&&el&&el.hidePopover) el.hidePopover(); if(kind==='dialog'&&el&&el.close) el.close(); }catch(x){}
+      if(el&&el.parentNode) el.parentNode.removeChild(el);
+      done(r);
+    }, r.err?0:1200);
+  }
+
+  function active(cb){
+    log('');
+    log('=== 6. Overlay-Tests (je ca. 1 s rote Fläche) ===');
+    var kinds=['fixed','popover','dialog'], res={};
+    (function next(i){
+      if(i===kinds.length){
+        function ok(r){ return !!r&&!r.err&&r.esc&&r.pts.every(function(s){ return /liegt oben/.test(s); }); }
+        log('');
+        log('=== 7. Fazit ===');
+        log('fixed ganz oben: '+ok(res.fixed)+' | popover ganz oben: '+ok(res.popover)+' | dialog ganz oben: '+ok(res.dialog));
+        log(ok(res.popover)||ok(res.dialog)
+          ?'=> Top-Layer-Variante (popover/dialog) funktioniert und liegt über allem.'
+          :ok(res.fixed)
+            ?'=> Einfaches position:fixed reicht in dieser Umgebung.'
+            :'=> Weder fixed noch Top-Layer vollständig wirksam. Siehe Abschnitte 2 bis 5.');
+        if(V.length) log('CSP-Verstöße während der Tests: '+V.join('; '));
+        return cb();
+      }
+      probe(kinds[i],function(r){
+        res[r.kind]=r;
+        log(r.err
+          ?r.kind+': Fehler: '+r.err
+          :r.kind+': '+(r.esc?'füllt den Viewport':'füllt den Viewport NICHT')+' ('+r.size+') | '+r.pts.join(' | '));
+        show(); next(i+1);
+      });
+    })(0);
+  }
+
+  document.getElementById('tt-run').addEventListener('click',function(){
+    if(busy) return; busy=true;
+    passive().then(function(){ show(); active(function(){ show(); busy=false; }); });
+  });
+  document.getElementById('tt-copy').addEventListener('click',function(){
+    var b=this;
+    function sel(){ var g=document.createRange(); g.selectNodeContents(out); var s=getSelection(); s.removeAllRanges(); s.addRange(g); b.textContent='Markiert: Strg+C'; }
+    try{ navigator.clipboard.writeText(out.textContent).then(function(){ b.textContent='Kopiert'; },sel); }catch(x){ sel(); }
+  });
+
+  passive().then(show);
+})();
+</script>
+<!-- ===== Ende Overlay-Diagnose ===== -->
